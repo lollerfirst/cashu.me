@@ -38,6 +38,10 @@ export const useSettingsStore = defineStore("settings", {
         "cashu.settings.useNumericKeyboard",
         true
       ),
+      receiveToTrustedMint: useLocalStorage<boolean>(
+        "cashu.settings.receiveToTrustedMint",
+        false
+      ),
     };
   },
 });

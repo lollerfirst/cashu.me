@@ -77,6 +77,71 @@
         </q-item>
       </q-list>
     </div>
+
+    <!-- trusted mints -->
+    <div class="q-py-sm q-px-sm text-left">
+      <q-list padding>
+        <q-item>
+          <q-item-section>
+            <q-item-label overline class="text-weight-bold"
+              >Trusted Receive</q-item-label
+            >
+            <q-item-label caption
+              >Receive all ecash to the selected trusted Mints.</q-item-label
+            >
+          </q-item-section>
+        </q-item>
+        <q-item class="q-px-md">
+          <q-item-section class="q-mx-none q-pl-none">
+            <!-- toggle to turn Lightning address on and off in new row -->
+            <div class="row q-pt-md">
+              <q-toggle v-model="receiveToTrustedMint" color="primary" />
+              <q-item-section>
+                <q-item-label title>Enable</q-item-label>
+                <q-item-label caption>
+                  Immediately melt ecash from unknown mints to trusted ones
+                </q-item-label>
+              </q-item-section>
+            </div>
+          </q-item-section>
+        </q-item>
+        <div v-if="receiveToTrustedMint" class="q-px-xs">
+          <q-item>
+            <q-item-section>
+              <q-item-label overline>Trusted Mints</q-item-label>
+              <q-item-label caption>Select trusted mints. </q-item-label>
+            </q-item-section>
+          </q-item>
+          <q-item
+            v-for="mint in mints"
+            :key="mint"
+            clickable
+            @click="mint.trusted = !mint.trusted"
+          >
+            <q-item>
+              <q-item-section avatar>
+                <q-icon
+                  :color="mint.trusted ? 'primary' : 'grey'"
+                  :name="
+                    mint.trusted ? 'check_circle' : 'radio_button_unchecked'
+                  "
+                  class="cursor-pointer"
+                />
+              </q-item-section>
+              <q-item-section
+                lines="1"
+                class="cursor-pointer"
+                style="word-break: break-word"
+              >
+                <q-item-label title>{{ mint.nickname }}</q-item-label>
+                <q-item-label caption> {{ mint.url }} </q-item-label>
+              </q-item-section>
+            </q-item>
+          </q-item>
+        </div>
+      </q-list>
+    </div>
+
     <!-- nostr -->
     <div class="q-py-sm q-px-sm text-left" on-left>
       <q-list padding>
@@ -1228,6 +1293,7 @@ export default defineComponent({
       "useWebsockets",
       "nfcEncoding",
       "useNumericKeyboard",
+      "receiveToTrustedMint",
     ]),
     ...mapState(useP2PKStore, ["p2pkKeys"]),
     ...mapWritableState(useP2PKStore, [
@@ -1236,12 +1302,8 @@ export default defineComponent({
     ]),
     ...mapWritableState(useUiStore, "showNfcButtonInDrawer"),
     ...mapWritableState(useNWCStore, ["showNWCDialog", "showNWCData"]),
-    ...mapState(useMintsStore, [
-      "activeMintUrl",
-      "mints",
-      "activeProofs",
-      "proofs",
-    ]),
+    ...mapWritableState(useMintsStore, ["mints"]),
+    ...mapState(useMintsStore, ["activeMintUrl", "activeProofs", "proofs"]),
     ...mapState(useNPCStore, ["npcLoading"]),
     ...mapState(useNostrStore, [
       "pubkey",

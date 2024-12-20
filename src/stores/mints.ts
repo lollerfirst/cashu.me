@@ -19,6 +19,7 @@ export type Mint = {
   keysets: MintKeyset[];
   nickname?: string;
   info?: GetInfoResponse;
+  trusted?: boolean;
   // initialize api: new CashuMint(url) on activation
 };
 
@@ -182,6 +183,9 @@ export const useMintsStore = defineStore("mints", {
       } else {
         return 1;
       }
+    },
+    trustedMints(): Mint[] {
+      return this.mints.filter((m) => m.trusted);
     },
   },
   actions: {
