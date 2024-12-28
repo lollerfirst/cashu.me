@@ -200,6 +200,32 @@ export const useMintsStore = defineStore("mints", {
         throw new Error("No active mint");
       }
     },
+    getMultiMints(method: string, unit: string) {
+      return this.mints.filter(async (m) => {
+        try {
+          const mint = new MintClass(m);
+          const nut15 = (await mint.api.getInfo()).nuts[15];
+          const viableMint = nut15?.methods.filter(
+            (m) => m.method === method && m.unit === unit
+          );
+          if (viableMint && viableMint.length > 0) return true;
+          else return false;
+        } catch (e) {
+          console.error(`${e}`);
+          return false;
+        }
+      });
+    },
+    multiMintBalance(method: string, unit: string) {
+      // return the overall balance of all mints supporting NUT-15 for a particular method and unit
+      const multiMints = this.getMultiMints(method, unit);
+      const balance = multiMints.reduce((sum, m) => {
+        const mint = new MintClass(m);
+        const mintBalance = mint.unitBalance(unit);
+        return sum + mintBalance;
+      }, 0);
+      return balance;
+    },
     activeMintBalance() {
       // return balance of active mint in active unit
       return this.activeMint().unitBalance(this.activeUnit);
