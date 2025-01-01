@@ -217,14 +217,19 @@ export const useMintsStore = defineStore("mints", {
       });
     },
     multiMintBalance(method: string, unit: string) {
-      // return the overall balance of all mints supporting NUT-15 for a particular method and unit
+      // returns:
+      // * the overall balance of all mints supporting NUT-15 for a particular method and unit
+      // * array of weights (share of how much each mint influences the overall balance)
       const multiMints = this.getMultiMints(method, unit);
-      const balance = multiMints.reduce((sum, m) => {
+      const mintBalances: Array<number> = [];
+      const overallBalance = multiMints.reduce((sum, m) => {
         const mint = new MintClass(m);
         const mintBalance = mint.unitBalance(unit);
+        mintBalances.push(mintBalance);
         return sum + mintBalance;
       }, 0);
-      return balance;
+      const weights = mintBalances.map((b) => b / overallBalance);
+      return { overallBalance: overallBalance, weights: weights };
     },
     activeMintBalance() {
       // return balance of active mint in active unit
