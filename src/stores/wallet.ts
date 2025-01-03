@@ -36,6 +36,7 @@ import {
   decodePaymentRequest,
   MintQuoteResponse,
   ProofState,
+  MeltPayload,
 } from "@cashu/cashu-ts";
 import { hashToCurve } from "@cashu/crypto/modules/common";
 import * as bolt11Decoder from "light-bolt11-decoder";
@@ -115,7 +116,7 @@ export const useWalletStore = defineStore("wallet", {
         },
         multiPartMeltQuotes: {
           payloads: [] as Array<[Mint, MeltQuotePayload]>,
-          responses: [] as Array<MeltQuoteResponse>,
+          responses: [] as Array<[Mint, MeltQuoteResponse]>,
           error: "",
         },
         invoice: {
@@ -200,15 +201,15 @@ export const useWalletStore = defineStore("wallet", {
         this.keysetCounters.push(newCounter);
       }
     },
-    getKeyset(): string {
+    getKeyset(mint?: MintClass): string {
       const mintStore = useMintsStore();
-      const keysets = mintStore.activeMint().keysets;
+      const keysets = (mint ?? mintStore.activeMint()).keysets;
       if (keysets == null || keysets.length == 0) {
         throw new Error("no keysets found.");
       }
-      const unitKeysets = mintStore
-        .activeMint()
-        .unitKeysets(mintStore.activeUnit);
+      const unitKeysets = (mint ?? mintStore.activeMint()).unitKeysets(
+        mintStore.activeUnit
+      );
       if (unitKeysets == null || unitKeysets.length == 0) {
         console.error("no keysets found for unit", mintStore.activeUnit);
         throw new Error("no keysets found for unit");
@@ -230,9 +231,9 @@ export const useWalletStore = defineStore("wallet", {
         throw new Error("no active keysets found for unit");
       }
       const keyset_id = sortedKeysets[0].id;
-      const keys = mintStore
-        .activeMint()
-        .mint.keys.find((k) => k.id === keyset_id);
+      const keys = (mint ?? mintStore.activeMint()).mint.keys.find(
+        (k) => k.id === keyset_id
+      );
       // if (keys) {
       //   this.wallet.keys = keys;
       // }
@@ -692,12 +693,12 @@ export const useWalletStore = defineStore("wallet", {
         });
         this.payInvoiceData.multiPartMeltQuotes.payloads = payloads;
         // Request melt quotes
-        let responses = [];
+        let responses: Array<[Mint, MeltQuoteResponse]> = [];
         for (const payload of payloads) {
           const data = await new MintClass(payload[0]).api.createMeltQuote(
             payload[1]
           );
-          responses.push(data);
+          responses.push([payload[0], data]);
           mintStore.assertMintError(data);
         }
         console.log(`responses: ${JSON.stringify(responses)}`);
@@ -743,6 +744,185 @@ export const useWalletStore = defineStore("wallet", {
         notifyApiError(error);
         throw error;
       } finally {
+      }
+    },
+    multiMelt: async function () {
+      const uIStore = useUiStore();
+      const proofsStore = useProofsStore();
+      const mintStore = useMintsStore();
+      const tokenStore = useTokensStore();
+      // throw an error if this.payInvoiceData.blocking is true
+      if (this.payInvoiceData.blocking) {
+        throw new Error("already processing an invoice.");
+      }
+      console.log("#### pay lightning");
+      if (this.payInvoiceData.invoice == null) {
+        throw new Error("no invoice provided.");
+      }
+      const invoice = this.payInvoiceData.invoice.bolt11;
+      // throw an error if the invoice is already in invoiceHistory
+      if (
+        this.invoiceHistory.find(
+          (i) => i.bolt11 === invoice && i.amount < 0 && i.status === "paid"
+        )
+      ) {
+        notifyError("Invoice already paid.");
+        throw new Error("invoice already paid.");
+      }
+      const quotes = this.payInvoiceData.multiPartMeltQuotes.responses;
+      if (!quotes || quotes.length === 0) {
+        throw new Error("no quote found.");
+      }
+      type MeltData = {
+        mint: Mint;
+        quote: MeltQuoteResponse;
+        amount: number;
+        counter: number;
+        sendProofs: Proof[];
+        countChangeOutputs: number;
+        keysetId: string;
+        keysetCounterIncrease: number;
+      };
+      const meltData: Array<MeltData> = [];
+      await uIStore.lockMutex();
+      try {
+        const activeUnit = mintStore.activeUnit;
+        for (const [mint, quote] of quotes) {
+          const amount = quote.amount + quote.fee_reserve;
+          let countChangeOutputs = 0;
+          const mintClass = new MintClass(mint);
+          const keysetId = this.getKeyset(mintClass);
+          let keysetCounterIncrease = 0;
+          try {
+            const { keepProofs: keepProofs, sendProofs: sendProofs } =
+              await this.send(
+                mintStore.proofsForMintAndUnit(activeUnit, mintClass),
+                amount,
+                false,
+                true
+              );
+            if (sendProofs.length === 0) {
+              throw new Error("could not split proofs.");
+            }
+            // NUT-08 blank outputs for change
+            const counter = this.keysetCounter(keysetId);
+
+            // QUIRK: we increase the keyset counter by sendProofs and the maximum number of possible change outputs
+            // this way, in case the user exits the app before payLnInvoice is completed, the returned change outputs won't cause a "outputs already signed" error
+            // if the payment fails, we decrease the counter again
+            this.increaseKeysetCounter(keysetId, sendProofs.length);
+            if (quote.fee_reserve > 0) {
+              countChangeOutputs = Math.ceil(Math.log2(quote.fee_reserve)) || 1;
+              this.increaseKeysetCounter(keysetId, countChangeOutputs);
+              keysetCounterIncrease += countChangeOutputs;
+            }
+
+            // Save melt information
+            meltData.push({
+              mint,
+              quote,
+              amount,
+              counter,
+              sendProofs,
+              countChangeOutputs,
+              keysetId,
+              keysetCounterIncrease,
+            } as MeltData);
+          } catch (error: any) {
+            console.error(error);
+            notifyApiError(error, "Payment failed");
+            throw error;
+          }
+        }
+
+        // Concurrent melt
+        // NOTE: if the user exits the app while we're in the API call, JS will emit an error that we would catch below!
+        // We have to handle that case in the catch block below
+        const bip39Seed = mnemonicToSeedSync(this.mnemonic);
+        const results = await Promise.all(
+          meltData.map((d) => {
+            const mint = new MintClass(d.mint).api;
+            const wallet = new CashuWallet(mint, {
+              bip39seed: bip39Seed,
+              unit: activeUnit,
+            });
+            return wallet.meltProofs(d.quote, d.sendProofs, {
+              keysetId: d.keysetId,
+              counter: d.counter,
+            });
+          })
+        );
+        if (!results.find((r) => r.quote.state === MeltQuoteState.PAID)) {
+          throw new Error("Invoice not paid.");
+        }
+        const amount = meltData.reduce((acc, d) => acc + d.amount, 0);
+        const change = results.reduce(
+          (acc, r) => acc + proofsStore.sumProofs(r.change),
+          0
+        );
+        let amount_paid = amount - change;
+        if (!!window.navigator.vibrate) navigator.vibrate(200);
+
+        notifySuccess(
+          "Paid " +
+            uIStore.formatCurrency(amount_paid, activeUnit) +
+            " via Lightning"
+        );
+        console.log("#### pay lightning: token paid");
+
+        // NUT-08 get change
+        if (change > 0) {
+          const changeProofs = results.map((r) => r.change).flat();
+          console.log("## Received change: " + change);
+          mintStore.addProofs(changeProofs);
+        }
+
+        const allSendProofs = meltData.map((d) => d.sendProofs).flat();
+        tokenStore.addPaidToken({
+          amount: -amount_paid,
+          serializedProofs: proofsStore.serializeProofs(allSendProofs),
+          unit: mintStore.activeUnit, // TODO: obviously this is not correct
+          mint: mintStore.activeMintUrl, // TODO: same here
+        });
+        // TODO: add invoiceHistory handling
+        this.payInvoiceData.invoice = { sat: 0, memo: "", bolt11: "" };
+        this.payInvoiceData.show = false;
+        return results;
+      } catch (error: any) {
+        if (isUnloading) {
+          // NOTE: An error is thrown when the user exits the app while the payment is in progress.
+          // do not handle the error if the user exits the app
+          throw error;
+        }
+        if (
+          meltData.find(async (d) => {
+            const meltQuote = await new MintClass(d.mint).api.checkMeltQuote(
+              d.quote.quote
+            );
+            return (
+              meltQuote.state === MeltQuoteState.PAID ||
+              meltQuote.state === MeltQuoteState.PENDING
+            );
+          })
+        ) {
+          console.log(
+            "### melt: error, but quote is paid or pending. not rolling back."
+          );
+          throw error;
+        }
+
+        // ROLL BACK
+        for (const d of meltData) {
+          proofsStore.setReserved(d.sendProofs, false);
+          this.increaseKeysetCounter(d.keysetId, -d.keysetCounterIncrease);
+          //this.removeOutgoingInvoiceFromHistory(d.quote.quote);
+          this.handleOutputsHaveAlreadyBeenSignedError(d.keysetId, error);
+        }
+
+        notifyApiError(error, "Payment failed");
+        throw error;
+      } finally {
+        uIStore.unlockMutex();
       }
     },
     melt: async function () {

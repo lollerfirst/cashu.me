@@ -545,6 +545,20 @@ export const useMintsStore = defineStore("mints", {
         throw new Error(`Mint error: ${response.error}`);
       }
     },
+    proofsForMintAndUnit: function (
+      unit: string,
+      mint: MintClass
+    ): WalletProof[] {
+      const unitKeysets = this.mints
+        .find((m) => m.url === mint.mint.url)
+        ?.keysets?.filter((k) => k.unit === unit);
+      if (!unitKeysets) {
+        return [];
+      }
+      return this.proofs.filter((p) =>
+        unitKeysets.map((k) => k.id).includes(p.id)
+      );
+    },
     // getBalance: function () {
     //   const mint = this.mints.find((m) => m.url === this.activeMintUrl);
     //   if (mint) {
