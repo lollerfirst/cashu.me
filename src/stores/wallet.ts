@@ -784,26 +784,24 @@ export const useWalletStore = defineStore("wallet", {
         keysetCounterIncrease: number;
       };
       const meltData: Array<MeltData> = [];
-      await uIStore.lockMutex();
-      try {
-        const activeUnit = mintStore.activeUnit;
-        for (const [mint, quote] of quotes) {
-          const amount = quote.amount + quote.fee_reserve;
-          let countChangeOutputs = 0;
-          const mintClass = new MintClass(mint);
-          const keysetId = this.getKeyset(mintClass);
-          let keysetCounterIncrease = 0;
+      const activeUnit = mintStore.activeUnit;
+      const savedActiveMint = mintStore.activeMint().mint;
+      for (const [mint, quote] of quotes) {
+        const amount = quote.amount + quote.fee_reserve;
+        let countChangeOutputs = 0;
+        // We need to activate each mint to perform a split
+        await mintStore.activateMint(mint);
+        const keysetId = this.getKeyset();
+        let keysetCounterIncrease = 0;
+        try {
+          const { keepProofs: keepProofs, sendProofs: sendProofs } =
+            await this.send(mintStore.activeProofs, amount, false, true);
+          if (sendProofs.length === 0) {
+            throw new Error("could not split proofs.");
+          }
+
+          await uIStore.lockMutex();
           try {
-            const { keepProofs: keepProofs, sendProofs: sendProofs } =
-              await this.send(
-                mintStore.proofsForMintAndUnit(activeUnit, mintClass),
-                amount,
-                false,
-                true
-              );
-            if (sendProofs.length === 0) {
-              throw new Error("could not split proofs.");
-            }
             // NUT-08 blank outputs for change
             const counter = this.keysetCounter(keysetId);
 
@@ -816,7 +814,6 @@ export const useWalletStore = defineStore("wallet", {
               this.increaseKeysetCounter(keysetId, countChangeOutputs);
               keysetCounterIncrease += countChangeOutputs;
             }
-
             // Save melt information
             meltData.push({
               mint,
@@ -828,13 +825,19 @@ export const useWalletStore = defineStore("wallet", {
               keysetId,
               keysetCounterIncrease,
             } as MeltData);
-          } catch (error: any) {
-            console.error(error);
-            notifyApiError(error, "Payment failed");
+          } catch (error) {
             throw error;
+          } finally {
+            uIStore.unlockMutex();
           }
+        } catch (error: any) {
+          console.error(error);
+          notifyApiError(error, "Payment failed");
+          throw error;
         }
-
+      }
+      await uIStore.lockMutex();
+      try {
         // Concurrent melt
         // NOTE: if the user exits the app while we're in the API call, JS will emit an error that we would catch below!
         // We have to handle that case in the catch block below
@@ -860,6 +863,8 @@ export const useWalletStore = defineStore("wallet", {
           (acc, r) => acc + proofsStore.sumProofs(r.change),
           0
         );
+        console.log(`multi-melt overall amount: ${amount}`);
+        console.log(`multi-melt overall change: ${change}`);
         let amount_paid = amount - change;
         if (!!window.navigator.vibrate) navigator.vibrate(200);
 
@@ -870,6 +875,9 @@ export const useWalletStore = defineStore("wallet", {
         );
         console.log("#### pay lightning: token paid");
 
+        const allSendProofs = meltData.map((d) => d.sendProofs).flat();
+        mintStore.removeProofs(allSendProofs);
+
         // NUT-08 get change
         if (change > 0) {
           const changeProofs = results.map((r) => r.change).flat();
@@ -877,7 +885,6 @@ export const useWalletStore = defineStore("wallet", {
           mintStore.addProofs(changeProofs);
         }
 
-        const allSendProofs = meltData.map((d) => d.sendProofs).flat();
         tokenStore.addPaidToken({
           amount: -amount_paid,
           serializedProofs: proofsStore.serializeProofs(allSendProofs),
