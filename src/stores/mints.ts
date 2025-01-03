@@ -201,14 +201,13 @@ export const useMintsStore = defineStore("mints", {
       }
     },
     getMultiMints(method: string, unit: string) {
-      return this.mints.filter(async (m) => {
+      return this.mints.filter((m) => {
         try {
-          const mint = new MintClass(m);
-          const nut15 = (await mint.api.getInfo()).nuts[15];
-          const viableMint = nut15?.methods.filter(
+          const nut15 = m.info?.nuts[15];
+          const viableMint = nut15?.find(
             (m) => m.method === method && m.unit === unit
           );
-          if (viableMint && viableMint.length > 0) return true;
+          if (viableMint) return true;
           else return false;
         } catch (e) {
           console.error(`${e}`);

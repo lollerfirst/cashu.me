@@ -651,6 +651,7 @@ export const useWalletStore = defineStore("wallet", {
         // Get multi-path supporting mints
         const activeUnit = mintStore.activeUnit;
         const multiMints = mintStore.getMultiMints("bolt11", activeUnit);
+        console.log(`${JSON.stringify(multiMints)}`);
         if (multiMints.length === 0) {
           throw new Error("no mint supports multi-part payments");
         }
