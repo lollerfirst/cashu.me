@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { currentDateStr } from "src/js/utils";
-import { useMintsStore, WalletProof } from "./mints";
+import { Mint, MintClass, useMintsStore, WalletProof } from "./mints";
 import { useLocalStorage } from "@vueuse/core";
 import { useProofsStore } from "./proofs";
 import { useTokensStore } from "./tokens";
@@ -113,7 +113,11 @@ export const useWalletStore = defineStore("wallet", {
           } as MeltQuoteResponse,
           error: "",
         },
-        multiPartMeltQuotes: [],
+        multiPartMeltQuotes: {
+          payloads: [] as Array<[Mint, MeltQuotePayload]>,
+          responses: [] as Array<MeltQuoteResponse>,
+          error: "",
+        },
         invoice: {
           sat: 0,
           memo: "",
@@ -623,6 +627,90 @@ export const useWalletStore = defineStore("wallet", {
         throw error;
       } finally {
         uIStore.unlockMutex();
+      }
+    },
+    /**
+     * This method attempts to find Mints supporting NUT-15 and creates a series of melt quotes
+     * for a multi-part payment of the invoice.
+     * @returns array of MeltQuoteResponse from each mint supporting NUT-15 for "sat" and "bolt11"
+     */
+    multiPathMeltQuotes: async function () {
+      // throw an error if this.payInvoiceData.blocking is true
+      if (this.payInvoiceData.blocking) {
+        throw new Error("already processing an melt quote.");
+      }
+      this.payInvoiceData.blocking = true;
+      this.payInvoiceData.multiPartMeltQuotes.error = "";
+      try {
+        const mintStore = useMintsStore();
+        if (this.payInvoiceData.input.request == "") {
+          throw new Error("no invoice provided.");
+        }
+
+        // Get multi-path supporting mints
+        const activeUnit = mintStore.activeUnit;
+        const multiMints = mintStore.getMultiMints("bolt11", activeUnit);
+        if (multiMints.length === 0) {
+          throw new Error("no mint supports multi-part payments");
+        }
+
+        // Get overall balance and weight distribution across the mints
+        const { overallBalance, weights } = mintStore.multiMintBalance(
+          "bolt11",
+          activeUnit
+        );
+        const invoiceAmount = this.payInvoiceData.invoice?.sat;
+        if (!invoiceAmount) {
+          throw new Error("invoice does not have an amount");
+        }
+        if (overallBalance < invoiceAmount) {
+          throw new Error("insufficient multi-mint balance");
+        }
+        console.log(`invoice amount: ${invoiceAmount}`);
+        // Craft melt quote payloads for each mint
+        const payloads: Array<[Mint, MeltQuotePayload]> = [];
+        let carry = 0.0;
+        multiMints.forEach((m, i) => {
+          const partialAmountFloat = invoiceAmount! * weights[i] + carry;
+          console.log(`partialAmountFloat: ${partialAmountFloat}`);
+          const partialAmount = Math.round(partialAmountFloat);
+          console.log(`partialAmount (integer): ${partialAmount}`);
+          console.log(`for Mint: ${m.url}`);
+          carry = partialAmountFloat - partialAmount;
+          if (partialAmount > 0) {
+            const meltQuotePayload: MeltQuotePayload = {
+              unit: activeUnit,
+              request: this.payInvoiceData.input.request,
+              options: {
+                mpp: {
+                  amount: partialAmount,
+                },
+              },
+            };
+            payloads.push([m, meltQuotePayload]);
+          }
+        });
+        this.payInvoiceData.multiPartMeltQuotes.payloads = payloads;
+        // Request melt quotes
+        let responses = [];
+        for (const payload of payloads) {
+          const data = await new MintClass(payload[0]).api.createMeltQuote(
+            payload[1]
+          );
+          responses.push(data);
+          mintStore.assertMintError(data);
+        }
+        console.log(`responses: ${JSON.stringify(responses)}`);
+        this.payInvoiceData.multiPartMeltQuotes.responses = responses;
+        this.payInvoiceData.blocking = false;
+        return responses;
+      } catch (error: any) {
+        this.payInvoiceData.blocking = false;
+        this.payInvoiceData.multiPartMeltQuotes.error = error;
+        console.error(error);
+        notifyApiError(error);
+        throw error;
+      } finally {
       }
     },
     // get a melt quote
@@ -1262,6 +1350,7 @@ export const useWalletStore = defineStore("wallet", {
       this.payInvoiceData.invoice = Object.freeze(cleanInvoice);
       // get quote for this request
       await this.meltQuote();
+      await this.multiPathMeltQuotes();
     },
     handleCashuToken: function () {
       this.payInvoiceData.show = false;

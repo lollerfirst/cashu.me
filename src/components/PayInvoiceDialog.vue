@@ -64,13 +64,15 @@
         <div class="col-12">
           <ChooseMint />
         </div>
-        <div v-if="enoughActiveBalance" class="row q-mt-lg">
+        <div class="row q-mt-lg">
           <q-btn
             unelevated
             rounded
             color="primary"
             :disabled="
-              payInvoiceData.blocking || payInvoiceData.meltQuote.error != ''
+              !enoughActiveBalance ||
+              payInvoiceData.blocking ||
+              payInvoiceData.meltQuote.error != ''
             "
             @click="melt"
             :label="
@@ -81,18 +83,36 @@
                 : 'Processing...'
             "
             :loading="globalMutexLock && !payInvoiceData.blocking"
+            class="q-px-lg q-mr-md"
+          >
+            <template v-slot:loading>
+              <q-spinner-hourglass />
+            </template>
+          </q-btn>
+          <q-btn
+            unelevated
+            rounded
+            color="primary"
+            :disabled="
+              !enoughMultiMintBalance ||
+              payInvoiceData.blocking ||
+              payInvoiceData.multiPartMeltQuotes.error != ''
+            "
+            @click="multiMelt"
+            :label="
+              payInvoiceData.multiPartMeltQuotes.error != ''
+                ? 'Error'
+                : !payInvoiceData.blocking
+                ? 'Multi-Mint Pay'
+                : 'Processing...'
+            "
+            :loading="globalMutexLock && !payInvoiceData.blocking"
             class="q-px-lg"
           >
             <template v-slot:loading>
               <q-spinner-hourglass />
             </template>
           </q-btn>
-          <q-btn v-close-popup flat color="grey" class="q-ml-auto">Close</q-btn>
-        </div>
-        <div v-else class="row q-mt-lg">
-          <q-btn unelevated rounded disabled color="yellow" text-color="black"
-            >Balance too low</q-btn
-          >
           <q-btn v-close-popup flat color="grey" class="q-ml-auto">Close</q-btn>
         </div>
       </div>
@@ -300,6 +320,7 @@ export default defineComponent({
       "activeUnit",
       "activeBalance",
       "activeMintBalance",
+      "multiMintBalance",
     ]),
     ...mapState(usePriceStore, ["bitcoinPrice"]),
     canPasteFromClipboard: function () {
@@ -315,11 +336,20 @@ export default defineComponent({
         this.payInvoiceData.meltQuote.response.amount
       );
     },
+    enoughMultiMintBalance: function () {
+      // (For the active unit)
+      const { overallBalance, weights } = this.multiMintBalance(
+        "bolt11",
+        this.activeUnit
+      );
+      return overallBalance >= this.payInvoiceData.invoice.sat;
+    },
   },
   methods: {
     ...mapActions(useWalletStore, [
       "melt",
       "meltQuote",
+      "multiMelt",
       "decodeRequest",
       "lnurlPaySecond",
     ]),
