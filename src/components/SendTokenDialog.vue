@@ -271,7 +271,7 @@
     </q-card>
     
     <!-- NFC Scanner Overlay -->
-    <SendNfcScanner v-if="showNfcScanner" @close="closeNfcScanner" />
+    <SendNfcScanner v-if="webNfcStore.isScanningPaymentRequest" />
   </q-dialog>
 </template>
 <script lang="ts">
@@ -323,7 +323,6 @@ export default defineComponent({
   data: function () {
     return {
       fiatKeyboardMode: false as boolean,
-      showNfcScanner: false as boolean,
     };
   },
   computed: {
@@ -363,6 +362,9 @@ export default defineComponent({
     ]),
     ...mapState(useSettingsStore, ["bitcoinPriceCurrency"]),
     ...mapState(useWorkersStore, ["tokenWorkerRunning"]),
+    webNfcStore() {
+      return useWebNfcStore();
+    },
     insufficientFunds: function (): boolean {
       if (this.sendData.amount == null) return false;
       return (
@@ -666,12 +668,9 @@ export default defineComponent({
     // NFC methods
     startNfcScanner() {
       if (this.ndefSupported) {
-        this.showNfcScanner = true;
+        // Use the WebNfcStore to start scanning
+        this.webNfcStore.startPaymentRequestScanner();
       }
-    },
-    
-    closeNfcScanner() {
-      this.showNfcScanner = false;
     },
   },
 });
