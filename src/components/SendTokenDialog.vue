@@ -44,7 +44,7 @@
               round
               @click="startNfcScanner"
             >
-              <q-icon name="nfc" size="1.2em" />
+              <NfcIcon size="1.2em" />
               <q-tooltip>Scan NFC payment request</q-tooltip>
             </q-btn>
             <q-btn
@@ -303,6 +303,7 @@ import {
   FileText as FileTextIcon,
   Lock as LockIcon,
   Scan as ScanIcon,
+  Nfc as NfcIcon,
 } from "lucide-vue-next";
 declare const windowMixin: any;
 export default defineComponent({
@@ -318,6 +319,7 @@ export default defineComponent({
     SendNfcScanner,
     ScanIcon,
     LockIcon,
+    NfcIcon,
   },
   props: {},
   data: function () {
