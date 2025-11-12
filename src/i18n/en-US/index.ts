@@ -1500,4 +1500,8 @@ export default {
     nostr: "Nostr",
     token_copied: "Token copied to clipboard",
   },
+  SendNfcScanner: {
+    prompt_text: "Place your NFC tag with payment request near your device",
+    cancel_button: "Cancel",
+  },
 };
