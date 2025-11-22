@@ -1420,6 +1420,9 @@ export default {
     },
     invoice: {
       title: "Pay { value }",
+      paying: "Paying",
+      paid: "Paid",
+      fee: "Fee",
       memo: {
         label: "Memo",
       },

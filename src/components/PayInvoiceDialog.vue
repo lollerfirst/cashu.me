@@ -28,11 +28,9 @@
           <div class="col text-center fixed-title-height">
             <div>
               <q-item-label
-                overline
-                class="q-mt-sm"
+                class="dialog-header q-mt-sm"
                 :class="$q.dark.isActive ? 'text-white' : 'text-black'"
                 style="
-                  font-size: 1rem;
                   display: inline-block;
                   white-space: normal;
                   word-break: break-word;
@@ -79,12 +77,12 @@
               <!-- INVOICE CONTENT -->
               <div v-if="payInvoiceData.invoice">
                 <div class="invoice-state-container">
-                  <transition name="fade">
+                  <transition name="slide-down">
                     <div :key="invoiceStateKey" class="invoice-state-content">
-                      <div v-if="isPaying" class="q-mb-md">
+                      <div v-if="isPaid" class="q-mb-md">
                         <div class="row">
-                          <div class="col-12 text-h4 text-weight-bold q-mb-xs">
-                            Paying
+                          <div class="col-12 text-h4 text-weight-bold">
+                            {{ $t("PayInvoiceDialog.invoice.paid") }}
                             {{
                               payInvoiceData.meltQuote.response &&
                               payInvoiceData.meltQuote.response.amount > 0
@@ -95,7 +93,43 @@
                                   )
                                 : ""
                             }}
-                            <q-spinner />
+                            <q-icon
+                              color="positive"
+                              name="check_circle"
+                              size="md"
+                              class="q-mb-sm"
+                            />
+                          </div>
+                        </div>
+                        <div
+                          v-if="payInvoiceData.fee_paid != null"
+                          class="text-subtitle2 text-grey-6"
+                        >
+                          {{ $t("PayInvoiceDialog.invoice.fee") }}:
+                          {{
+                            formatCurrency(
+                              payInvoiceData.fee_paid,
+                              activeUnit,
+                              true
+                            )
+                          }}
+                        </div>
+                      </div>
+                      <div v-else-if="isPaying" class="q-mb-md">
+                        <div class="row">
+                          <div class="col-12 text-h4 text-weight-bold q-mb-xs">
+                            {{ $t("PayInvoiceDialog.invoice.paying") }}
+                            {{
+                              payInvoiceData.meltQuote.response &&
+                              payInvoiceData.meltQuote.response.amount > 0
+                                ? formatCurrency(
+                                    payInvoiceData.meltQuote.response.amount,
+                                    activeUnit,
+                                    true
+                                  )
+                                : ""
+                            }}
+                            <q-spinner class="q-mb-sm" />
                           </div>
                         </div>
                       </div>
@@ -309,8 +343,15 @@
                     <AmountInputComponent
                       v-model="payInvoiceData.input.amount"
                       :enabled="true"
-                      :muted="insufficientFunds"
-                      :min-amount="payInvoiceData.lnurlpay.minSendable / 1000"
+                      :muted="
+                        insufficientFunds ||
+                        (payInvoiceData.lnurlpay.minSendable &&
+                          payInvoiceData.input.amount <
+                            payInvoiceData.lnurlpay.minSendable / 1000) ||
+                        (payInvoiceData.lnurlpay.maxSendable &&
+                          payInvoiceData.input.amount >
+                            payInvoiceData.lnurlpay.maxSendable / 1000)
+                      "
                       :max-amount="
                         Math.min(
                           payInvoiceData.lnurlpay.maxSendable / 1000,
@@ -550,6 +591,7 @@ import AmountInputComponent from "components/AmountInputComponent.vue";
 import ParseInputComponent from "components/ParseInputComponent.vue";
 
 import * as _ from "underscore";
+import { Proof } from "@cashu/cashu-ts";
 
 declare const windowMixin: any;
 
@@ -569,6 +611,7 @@ export default defineComponent({
     return {
       fiatKeyboardMode: false as boolean,
       isPaying: false as boolean,
+      isPaid: false as boolean,
     };
   },
   watch: {
@@ -584,51 +627,40 @@ export default defineComponent({
     },
     "payInvoiceData.lnurlpay": {
       handler: function (newVal) {
-        if (newVal && newVal.maxSendable != newVal.minSendable) {
-          // Initialize amount to minSendable if not set
-          if (
-            this.payInvoiceData.input.amount == null ||
-            this.payInvoiceData.input.amount === 0
-          ) {
-            this.payInvoiceData.input.amount = newVal.minSendable / 1000;
-          }
-          // Show keyboard for variable amount LNURL
-          this.showNumericKeyboard = true;
-        } else if (newVal && newVal.maxSendable == newVal.minSendable) {
+        if (newVal && newVal.maxSendable == newVal.minSendable) {
           // Set fixed amount
           this.payInvoiceData.input.amount = newVal.minSendable / 1000;
-          // Hide keyboard for fixed amount LNURL
           this.showNumericKeyboard = false;
-        } else if (!newVal) {
-          // Hide keyboard when LNURL is cleared
-          this.showNumericKeyboard = false;
+        } else {
+          this.showNumericKeyboard = true;
         }
       },
       immediate: true,
     },
     "payInvoiceData.show": {
-      handler: function (val) {
-        if (!val) {
-          // Hide keyboard when dialog is closed
+      handler: async function (val, oldVal) {
+        // Intercept automatic close after successful payment
+        if (
+          !val &&
+          oldVal &&
+          this.isPaying &&
+          !this.payInvoiceData.meltQuote.error
+        ) {
+          // Payment just succeeded and store is trying to close dialog
+          // Re-open it to show success state
+          this.isPaying = false;
+          this.isPaid = true;
+          this.payInvoiceData.show = true; // Prevent close
+
+          // Wait 2 seconds then allow close
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          this.isPaid = false;
+          this.payInvoiceData.show = false;
+        } else if (!val) {
+          // Normal close - reset states
           this.showNumericKeyboard = false;
-          // Reset payment state when dialog closes
           this.isPaying = false;
-        }
-      },
-    },
-    "payInvoiceData.blocking": {
-      handler: function (newVal, oldVal) {
-        // When blocking changes from true to false, payment is complete
-        if (oldVal === true && newVal === false) {
-          this.isPaying = false;
-        }
-      },
-    },
-    "payInvoiceData.invoice": {
-      handler: function (newVal) {
-        // Reset payment state when invoice changes
-        if (!newVal) {
-          this.isPaying = false;
+          this.isPaid = false;
         }
       },
     },
@@ -742,7 +774,9 @@ export default defineComponent({
       return balanceInDisplayUnit;
     },
     invoiceStateKey: function (): string {
-      if (this.isPaying) {
+      if (this.isPaid) {
+        return "paid";
+      } else if (this.isPaying) {
         return "paying";
       } else if (
         this.payInvoiceData.meltQuote.response &&
@@ -794,12 +828,18 @@ export default defineComponent({
       }
       this.isPaying = true;
       try {
-        await this.meltInvoiceData();
+        const result = await this.meltInvoiceData(true);
+        const returnedChange = result.change.reduce(
+          (acc: number, p: Proof) => acc + p.amount,
+          0
+        );
+        this.payInvoiceData.fee_paid =
+          this.payInvoiceData.meltQuote.response.fee_reserve - returnedChange;
+        console.log("### fee_paid", this.payInvoiceData.fee_paid);
+        // Success state and closing is handled by the watcher on payInvoiceData.show
       } catch (error) {
         // Error handling is done in the store, but we ensure isPaying is reset
-        // The watcher will also reset it when blocking becomes false
         console.error("Payment error:", error);
-      } finally {
         this.isPaying = false;
       }
     },
@@ -938,13 +978,13 @@ export default defineComponent({
   width: 100%;
 }
 
-.fade-enter-active {
-  transition: opacity 0.3s ease;
+.slide-down-enter-active {
+  transition: all 0.4s ease;
   z-index: 2;
 }
 
-.fade-leave-active {
-  transition: opacity 0.3s ease;
+.slide-down-leave-active {
+  transition: all 0.4s ease;
   position: absolute;
   top: 0;
   left: 0;
@@ -952,11 +992,13 @@ export default defineComponent({
   z-index: 1;
 }
 
-.fade-enter-from {
+.slide-down-enter-from {
   opacity: 0;
+  transform: translateY(-20px);
 }
 
-.fade-leave-to {
+.slide-down-leave-to {
   opacity: 0;
+  transform: translateY(20px);
 }
 </style>
